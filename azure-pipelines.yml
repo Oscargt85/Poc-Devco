@@ -1,0 +1,77 @@
+trigger:
+- main
+- infra
+
+pool: Default
+
+variables:
+  isMain: $[eq(variables['Build.SourceBranch'], 'refs/heads/main')]
+
+stages:
+- stage: 'Integracion_Continua'
+  condition: and(succeeded(), eq(variables.isMain, 'true'))
+  jobs:
+  - job: 'CI'
+    variables:
+      - group: sonar
+    steps:
+      - task: SonarQubePrepare@5
+        inputs:
+          SonarQube: 'SonarQube'
+          scannerMode: 'CLI'
+          configMode: 'manual'
+          cliProjectKey: $(cli_project_key)
+          cliProjectName: $(cli_project_name)
+          cliSources: '.' 
+      - task: SonarQubeAnalyze@5
+      - task: SonarQubePublish@5
+        inputs:
+          pollingTimeoutSec: '300'
+
+- stage: 'Despliegue_Continuo'
+  condition: and(succeeded(), eq(variables.isMain, 'true'))
+  jobs:
+  - job: 'CD'
+    variables:
+      - group: aws
+    steps:
+      - task: TerraformTaskV4@4
+        inputs:
+          provider: 'aws'
+          command: 'init'
+          backendServiceAWS: 'aws_tf'
+          backendAWSBucketName: 'devco-tf-state'
+          backendAWSKey: 'infra'
+      - task: TerraformTaskV4@4
+        inputs:
+          provider: 'aws'
+          command: 'validate'
+      - task: TerraformTaskV4@4
+        inputs:
+          provider: 'aws'
+          command: 'plan'
+          environmentServiceNameAWS: 'aws_tf'
+      - task: TerraformTaskV4@4
+        inputs:
+          provider: 'aws'
+          command: 'apply'
+          commandOptions: '-auto-approve'
+          environmentServiceNameAWS: 'aws_tf'
+  - job: 'destroy_cluster'
+    displayName: 'Destroy cluster'
+    dependsOn: 'CD'
+    condition: succeeded()
+    steps:
+      - task: TerraformTaskV4@4
+        inputs:
+          provider: 'aws'
+          command: 'init'
+          backendServiceAWS: 'aws_tf'
+          backendAWSBucketName: 'devco-tf-state'
+          backendAWSKey: 'infra'    
+      - task: TerraformTaskV4@4
+        inputs:
+          provider: 'aws'
+          command: 'destroy'
+          commandOptions: '-auto-approve'
+          environmentServiceNameAWS: 'aws_tf'
